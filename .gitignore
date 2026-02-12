@@ -1,0 +1,19 @@
+.env
+setup_email_db.json
+files/
+prom/
+__pycache__/
+.vscode/
+old/
+modest_gauss_backup.txt
+*_backup.txt
+
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS files
+.DS_Store
+Thumbs.db
