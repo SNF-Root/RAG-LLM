@@ -55,4 +55,4 @@ class PromForm:
         return cursor.rowcount
 
     def is_empty(self) -> List[str]:
-        return [field for field, value in asdict(self).items() if value is None]
+        return [field for field, value in asdict(self).items() if not value]

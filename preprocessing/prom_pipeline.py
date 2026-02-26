@@ -7,9 +7,8 @@ from typing import List
 from dataclasses import replace
 from database.pg import get_db_connection, init_prom_table
 import asyncio
-from promTothread import extract_prom_from_docx, build_embed_string
+from test import fork_then_extract, build_embed_string
 from openai import AsyncOpenAI
-from test import extractor
 
 
 
@@ -26,27 +25,28 @@ async def embed_concat_json(concat_thread: str) -> List[float]:
     """
     Async version of embedding, comes post LLM JSON retrieval in the pipeline
     """
-
     response = await client.embeddings.create(
         model = "text-embedding-ada-002",
         input=concat_thread
     )
+    
 
     return response.data[0].embedding
 
-def process_file(file_path) -> PromForm:
-    is_docx = file_path.lower().endswith('.docx')
-    if is_docx:
-        prom = extract_prom_from_docx(file_path, debug=False)
-    else:
-        print("PDF are hanging, skipping for now")
-        # prom = extract_prom_from_docling(file_path, debug=False)
-        prom = None
+# def process_file(file_path) -> PromForm:
+#     is_docx = file_path.lower().endswith('.docx')
+#     if is_docx:
+#         prom = extract_prom_from_docx(file_path, debug=False)
+#     else:
+#         print("PDF are hanging, skipping for now")
+#         # prom = extract_prom_from_docling(file_path, debug=False)
+#         prom = None
 
-    # prom = extract_prom_unified(file_path, debug=False)
-    if prom is None:
-        return None, file_path
-    return prom, None
+#     # prom = extract_prom_unified(file_path, debug=False)
+#     if prom is None:
+#         return None, file_path
+#     return prom, None
+
 
 
 def filter_duplicates(prom_forms: List[PromForm]) -> List[PromForm]:
@@ -94,7 +94,7 @@ async def embed_pipeline(prom_form: PromForm, embed_sem: asyncio.Semaphore) -> P
     # Build the embed string from form fields
     embed_string = build_embed_string(prom_form)
     if not embed_string:
-        return "Could not build embed string - missing required fields"
+        return f"Could not build embed string in {prom_form.filename}:{has_empty}"
     
     async with embed_sem:
         prom_embed = await embed_concat_json(embed_string)
@@ -103,7 +103,7 @@ async def embed_pipeline(prom_form: PromForm, embed_sem: asyncio.Semaphore) -> P
     
     return replace(prom_form, embedded_string=embed_string, request_embedding=prom_embed, process_embedding=process_embed)
 
-async def run_prom_pipeline(prom_objects: List[PromForm], con):
+async def run_prom_pipeline(prom_objects: List[PromForm], con) -> int:
     embed_sem = asyncio.Semaphore(MAX_CONCURRENT_PROM_REQUESTS)
     tasks = [embed_pipeline(prom_object, embed_sem=embed_sem) for prom_object in prom_objects]
     for coro in asyncio.as_completed(tasks):
@@ -115,6 +115,7 @@ async def run_prom_pipeline(prom_objects: List[PromForm], con):
             continue
         finished_prom_object.insert_prom(con)
         print(f"Finished Inserting {finished_prom_object.request_title}")
+    
 
 
 
@@ -123,7 +124,7 @@ if __name__ == "__main__":
     pdf_path = "../files/promForms/"
 
     cpu_count = os.cpu_count()
-    print(f"Running {cpu_count - 2} processes simultaneously")
+    print(f"Running {cpu_count - 4} processes simultaneously")
 
     con = get_db_connection()
     try: 
@@ -132,39 +133,49 @@ if __name__ == "__main__":
         print("Could not initiate Table")
         print(e)
 
-    prom_dir = "../files/promForms/2019"
-    pdf_files = [os.path.join(prom_dir, f) for f in os.listdir(prom_dir) 
-                 if f.endswith(('.pdf', '.docx', '.PDF', '.DOCX'))]
-    print(f"Found {len(pdf_files)} files to process")
-    if not pdf_files:
-        print(f"No files found in {prom_dir}")
-        raise SystemExit(0)
-    t0 = time.perf_counter()
-    processed_files = 0
-    pool = Pool(processes = (cpu_count - 2))
-    results = []
-    problematic_files = []
-    try:
-        for result, bad in pool.imap_unordered(process_file, pdf_files):
-            if bad:
-                problematic_files.append(bad)
-            elif result:
-                processed_files += 1
-                print(f"Finished processing {result.filename}")
-                print(f"Finished {processed_files/len(pdf_files)*100:.1f}%")
-            results.append(result)
-    finally:
-        pool.terminate()
-        pool.join()
-    
-    print(f"Problematic files: {problematic_files}")
-    results = [r for r in results if r is not None]
-    results = filter_duplicates(results)
-
+    prom_dirs = ["../files/promForms/2019", "../files/promForms/2020", "../files/promForms/2021"]
+    for prom_dir in prom_dirs:
+        pdf_files = [os.path.join(prom_dir, f) for f in os.listdir(prom_dir) 
+                    if f.endswith(('.pdf', '.docx', '.PDF', '.DOCX'))]
+        print(f"Found {len(pdf_files)} files to process")
+        if not pdf_files:
+            print(f"No files found in {prom_dir}")
+            raise SystemExit(0)
+        # t0 = time.perf_counter()
+        processed_files = 0
+        pool = Pool(processes = (cpu_count - 4))
+        results = []
+        problematic_files = []
+        try:
+            for result in pool.imap_unordered(fork_then_extract, pdf_files):
+                if isinstance(result, str):
+                    problematic_files.append(result)
+                else:
+                    processed_files += 1
+                    print(f"Finished processing {result.filename}")
+                    print(f"Finished {processed_files/len(pdf_files)*100:.1f}%")
+                    results.append(result)
+                # if bad:
+                #     problematic_files.append(bad)
+                # elif result:
+                #     processed_files += 1
+                #     print(f"Finished processing {result.filename}")
+                #     print(f"Finished {processed_files/len(pdf_files)*100:.1f}%")
+                # results.append(result)
+        finally:
+            pool.terminate()
+            pool.join()
         
-    if results:
-        asyncio.run(run_prom_pipeline(results, con))
-        print(f"Pipeline complete. Processed {len(results)} unique forms.")
-    else:
-        print("No valid results to process")
+        print(f"Problematic files: {problematic_files}")
+        #OPTIMIZE THIS, can do this in the pipeline on insertion instead of another o(N) operation
+        print(f"successfully process {processed_files}/{len(pdf_files)}")
+        print(f"Finished {processed_files/len(pdf_files)*100:.1f}%")
+        results = [r for r in results if r is not None]
+        results = filter_duplicates(results)
+
+        if results:
+            asyncio.run(run_prom_pipeline(results, con))
+            print(f"Pipeline complete. Processed {len(results)} unique forms.")
+        else:
+            print("No valid results to process")
     

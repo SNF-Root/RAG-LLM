@@ -184,7 +184,7 @@ function App() {
       <main
         className={`flex-1 flex flex-col px-4 ${
           view === 'upload'
-            ? 'items-stretch py-10'
+            ? 'items-stretch py-6 min-h-0 overflow-hidden'
             : hasMessages
               ? 'items-stretch py-6'
               : 'items-center justify-center py-12'
