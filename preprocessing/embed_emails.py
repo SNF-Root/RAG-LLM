@@ -159,6 +159,7 @@ def validating_llm_response(result: str) -> dict | None:
         "prom_approval": prom_approval,
         "chemicals": chemicals_string,
         "processes": processes_string,
+        "llm_context": llm_context
     }
 
 

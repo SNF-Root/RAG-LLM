@@ -1,5 +1,5 @@
 import os
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from openai import OpenAI
@@ -70,6 +70,63 @@ class EmbedResponse(BaseModel):
     text: str
 
 
+class SearchResult(BaseModel):
+    id: int
+    title: str
+    similarity: float
+
+
+class SearchResponse(BaseModel):
+    results: list[SearchResult]
+
+class UploadRejectedFile(BaseModel):
+    filename: str
+    reason: str
+
+
+class UploadRegisterResponse(BaseModel):
+    upload_kind: str
+    valid_extensions: list[str]
+    accepted: list[str]
+    rejected: list[UploadRejectedFile]
+
+
+VALID_PROM_UPLOAD_EXTENSIONS = [".pdf", ".docx"]
+
+
+@app.get("/upload/prom", response_model=UploadRegisterResponse)
+def register_prom_upload_filenames(
+    filename: list[str] = Query(default=[], description="One or more filenames (or relative paths)."),
+) -> UploadRegisterResponse:
+    if not filename:
+        raise HTTPException(status_code=400, detail="At least one 'filename' query param is required")
+
+    accepted: list[str] = []
+    rejected: list[UploadRejectedFile] = []
+
+    for raw_name in filename:
+        name = (raw_name or "").strip()
+        if not name:
+            rejected.append(UploadRejectedFile(filename=raw_name, reason="empty_filename"))
+            continue
+
+        _, ext = os.path.splitext(name)
+        if ext.lower() not in VALID_PROM_UPLOAD_EXTENSIONS:
+            rejected.append(
+                UploadRejectedFile(filename=name, reason="invalid_extension")
+            )
+            continue
+
+        accepted.append(name)
+
+    return UploadRegisterResponse(
+        upload_kind="prom_forms",
+        valid_extensions=VALID_PROM_UPLOAD_EXTENSIONS,
+        accepted=accepted,
+        rejected=rejected,
+    )
+
+
 def embed_query(text: str) -> list[float]:
     response = client.embeddings.create(model=EMBEDDING_MODEL, input=text)
     return response.data[0].embedding
@@ -91,6 +148,84 @@ def chat_completion(system_prompt: str, user_payload: str) -> str:
     return response_text.strip() or "No summary returned."
 
 
+
+
+@app.post("/search/emails", response_model=SearchResponse)
+def search_emails(request: EmbedRequest) -> SearchResponse:
+    """Return the top 5 most similar email threads (llm_context + similarity)."""
+    query = request.text.strip()
+    if not query:
+        raise HTTPException(status_code=400, detail="Text is required")
+
+    query_embedding = embed_query(query)
+
+    con = None
+    try:
+        con = get_db_connection()
+        cursor = con.cursor()
+        cursor.execute(
+            """
+            SELECT
+                email_id,
+                llm_context,
+                1 - (embedding <=> %s::vector) AS similarity
+            FROM email_embeddings
+            ORDER BY embedding <=> %s::vector
+            LIMIT 5
+            """,
+            (query_embedding, query_embedding),
+        )
+        rows = cursor.fetchall()
+    except Exception as error:
+        raise HTTPException(status_code=500, detail=f"DB query failed: {error}") from error
+    finally:
+        if con is not None:
+            con.close()
+
+    results = [
+        SearchResult(id=row[0], title=row[1] or "No context available", similarity=float(row[2]))
+        for row in rows
+    ]
+    return SearchResponse(results=results)
+
+
+@app.post("/search/proms", response_model=SearchResponse)
+def search_proms(request: EmbedRequest) -> SearchResponse:
+    """Return the top 5 most similar PROM requests (title + similarity only)."""
+    query = request.text.strip()
+    if not query:
+        raise HTTPException(status_code=400, detail="Text is required")
+
+    query_embedding = embed_query(query)
+
+    con = None
+    try:
+        con = get_db_connection()
+        cursor = con.cursor()
+        cursor.execute(
+            """
+            SELECT
+                prom_id,
+                request_title,
+                1 - (request_embedding <=> %s::vector) AS similarity
+            FROM prom_embeddings
+            ORDER BY request_embedding <=> %s::vector
+            LIMIT 5
+            """,
+            (query_embedding, query_embedding),
+        )
+        rows = cursor.fetchall()
+    except Exception as error:
+        raise HTTPException(status_code=500, detail=f"DB query failed: {error}") from error
+    finally:
+        if con is not None:
+            con.close()
+
+    results = [
+        SearchResult(id=row[0], title=row[1] or "Untitled Request", similarity=float(row[2]))
+        for row in rows
+    ]
+    return SearchResponse(results=results)
 
 
 @app.post("/embed/emails", response_model=EmbedResponse)

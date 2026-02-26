@@ -9,6 +9,7 @@ from database.pg import get_db_connection, init_prom_table
 import asyncio
 from promTothread import extract_prom_from_docx, build_embed_string
 from openai import AsyncOpenAI
+from test import extractor
 
 
 
@@ -33,7 +34,7 @@ async def embed_concat_json(concat_thread: str) -> List[float]:
 
     return response.data[0].embedding
 
-def process_file(file_path) -> PromForm and str:
+def process_file(file_path) -> PromForm:
     is_docx = file_path.lower().endswith('.docx')
     if is_docx:
         prom = extract_prom_from_docx(file_path, debug=False)
@@ -156,7 +157,6 @@ if __name__ == "__main__":
         pool.terminate()
         pool.join()
     
-    # Filter out None results and duplicates
     print(f"Problematic files: {problematic_files}")
     results = [r for r in results if r is not None]
     results = filter_duplicates(results)

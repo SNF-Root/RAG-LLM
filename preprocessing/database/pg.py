@@ -14,18 +14,18 @@ def get_db_connection():
     )
 
 
-def init_email_table(con = None):
+def init_email_table(con = None, drop_table: bool = False):
     """Initialize database tables. Pass existing connection to reuse it."""
     should_close = False
     if con is None:
-        con = get_db_connection
+        con = get_db_connection()
         should_close = True
-    con = get_db_connection()
     cursor = con.cursor()
 
     cursor.execute("CREATE EXTENSION IF NOT EXISTS vector")
 
-    cursor.execute("DROP TABLE IF EXISTS email_embeddings")
+    if drop_table:
+        cursor.execute("DROP TABLE IF EXISTS email_embeddings")
 
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS email_embeddings (
@@ -37,6 +37,7 @@ def init_email_table(con = None):
         prom_considerations TEXT NOT NULL,
         chemicals TEXT NOT NULL,
         processes TEXT NOT NULL,
+        llm_context TEXT NOT NULL,
         raw_thread TEXT NOT NULL,
         embedded_string TEXT NOT NULL,
         embedding vector(1536) NOT NULL,

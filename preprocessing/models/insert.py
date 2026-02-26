@@ -12,6 +12,7 @@ class Email:
     chemicals: Optional[str] = None
     processes: Optional[str] = None
     raw_thread: Optional[str] = None
+    llm_context: Optional[str] = None
     embedded_string: Optional[str] = None
     embedding: Optional[list[float]] = None
 
@@ -19,10 +20,10 @@ class Email:
     def insert_email(self, con):
         cursor = con.cursor()
         cursor.execute("""
-        INSERT INTO email_embeddings (date, filename, requestor, prom_approval, prom_considerations, chemicals, processes, raw_thread, embedded_string, embedding)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        INSERT INTO email_embeddings (date, filename, requestor, prom_approval, prom_considerations, chemicals, processes, llm_context, raw_thread, embedded_string, embedding)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT (date, filename, requestor, chemicals, processes) DO NOTHING
-        """, (self.date, self.filepath, self.requestor, self.prom_approval, self.prom_considerations, self.chemicals, self.processes, self.raw_thread, self.embedded_string, self.embedding))
+        """, (self.date, self.filepath, self.requestor, self.prom_approval, self.prom_considerations, self.chemicals, self.processes, self.llm_context, self.raw_thread, self.embedded_string, self.embedding))
         con.commit()
         return cursor.rowcount
 

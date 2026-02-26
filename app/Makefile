@@ -8,10 +8,10 @@ help:
 	@echo "  help     - Show this help message"
 
 server:
-	cd .. && DB_HOST=localhost DB_PORT=5433 uvicorn app.server.main:app --reload --port 8000
+	cd .. && DB_HOST=db DB_PORT=5432 uvicorn app.server.main:app --host 0.0.0.0 --reload --port 8000
 
 frontend:
-	cd frontend && npm run dev
+	cd frontend && npm run dev -- --host 0.0.0.0
 
 
 snfRAG:

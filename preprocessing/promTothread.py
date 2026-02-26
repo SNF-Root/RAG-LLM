@@ -346,7 +346,7 @@ def extract_prom_from_docling(file_path: str, debug: bool = False) -> Optional[P
                 return True
         return False
     
-    # Helper to get next meaningful text item
+    # Helper to get next meaningful  text item
     def get_next_content(idx: int) -> Optional[str]:
         """Get the next text item's content if it exists and is meaningful."""
         if idx + 1 < len(texts):
