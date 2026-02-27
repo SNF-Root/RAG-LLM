@@ -133,7 +133,7 @@ if __name__ == "__main__":
         print("Could not initiate Table")
         print(e)
 
-    prom_dirs = ["../files/promForms/2019", "../files/promForms/2020", "../files/promForms/2021"]
+    prom_dirs = ["../files/promForms/2022"]
     for prom_dir in prom_dirs:
         pdf_files = [os.path.join(prom_dir, f) for f in os.listdir(prom_dir) 
                     if f.endswith(('.pdf', '.docx', '.PDF', '.DOCX'))]
@@ -141,7 +141,7 @@ if __name__ == "__main__":
         if not pdf_files:
             print(f"No files found in {prom_dir}")
             raise SystemExit(0)
-        # t0 = time.perf_counter()
+        start = time.perf_counter()
         processed_files = 0
         pool = Pool(processes = (cpu_count - 4))
         results = []
@@ -178,4 +178,6 @@ if __name__ == "__main__":
             print(f"Pipeline complete. Processed {len(results)} unique forms.")
         else:
             print("No valid results to process")
+
+        end = time.perf_counter()
     
