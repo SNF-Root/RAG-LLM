@@ -1,17 +1,17 @@
-import re
-from typing import Optional, Dict
-from docling.document_converter import DocumentConverter, PdfFormatOption
-from docling.datamodel.pipeline_options import PdfPipelineOptions
-from docling.datamodel.base_models import InputFormat
-from models.insert import PromForm
-import os
-from multiprocessing import Pool
-import time
-from openai import AsyncOpenAI
-from typing import List
-from dataclasses import replace
-from database.pg import get_db_connection, init_prom_table
-import asyncio
+# import re
+# from typing import Optional, Dict
+# from docling.document_converter import DocumentConverter, PdfFormatOption
+# from docling.datamodel.pipeline_options import PdfPipelineOptions
+# from docling.datamodel.base_models import InputFormat
+# from models.insert import PromForm
+# import os
+# from multiprocessing import Pool
+# import time
+# from openai import AsyncOpenAI
+# from typing import List
+# from dataclasses import replace
+# from database.pg import get_db_connection, init_prom_table
+# import asyncio
 
 
 
