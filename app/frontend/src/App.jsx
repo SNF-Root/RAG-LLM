@@ -178,13 +178,18 @@ function App() {
   const hasMessages = messages.length > 0
 
   return (
-    <div className="min-h-screen flex flex-col bg-gradient-to-b from-slate-50 to-slate-100">
+    <div
+      className={[
+        'flex flex-col bg-gradient-to-b from-slate-50 to-slate-100',
+        view === 'upload' ? 'h-screen overflow-hidden' : 'min-h-screen',
+      ].join(' ')}
+    >
       <Header view={view} setView={setView} />
 
       <main
         className={`flex-1 flex flex-col px-4 ${
           view === 'upload'
-            ? 'items-stretch py-6 min-h-0 overflow-hidden'
+            ? 'items-stretch py-2 min-h-0 overflow-hidden'
             : hasMessages
               ? 'items-stretch py-6'
               : 'items-center justify-center py-12'
@@ -246,7 +251,7 @@ function App() {
         )}
       </main>
 
-      <Footer />
+      {view === 'upload' ? null : <Footer />}
     </div>
   )
 }

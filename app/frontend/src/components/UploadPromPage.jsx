@@ -18,20 +18,110 @@ const getExtension = (name) => {
 
 const getDisplayPath = (file) => file?.webkitRelativePath || file?.name || ''
 
-const registerFilename = async (path) => {
-  const url = `/upload/prom?filename=${encodeURIComponent(path)}`
-  const res = await fetch(url, { method: 'GET' })
-  if (!res.ok) throw new Error(`Register failed (${res.status})`)
-  return res.json()
+const resetUploadCounter = async () => {
+  try {
+    await fetch('/upload/reset-counter', { method: 'POST' })
+  } catch {
+    // Counter reset failure should not block UI actions.
+  }
 }
 
+const uploadPromFile = (file, path, onProgress) =>
+  new Promise((resolve, reject) => {
+    const formData = new FormData()
+    formData.append('file', file)
+    formData.append('path', path)
+
+    const xhr = new XMLHttpRequest()
+    xhr.open('POST', '/upload/prom')
+
+    xhr.upload.onprogress = (event) => {
+      if (!event.lengthComputable) return
+      const percent = Math.max(
+        1,
+        Math.min(99, Math.round((event.loaded / event.total) * 100)),
+      )
+      onProgress(percent)
+    }
+
+    xhr.onerror = () => {
+      reject(new Error('Network error while uploading file'))
+    }
+
+    xhr.onload = () => {
+      if (xhr.status < 200 || xhr.status >= 300) {
+        reject(new Error(`Upload failed (${xhr.status})`))
+        return
+      }
+      let payload = null
+      try {
+        payload = xhr.responseText ? JSON.parse(xhr.responseText) : null
+      } catch {
+        payload = null
+      }
+      resolve(payload)
+    }
+
+    xhr.send(formData)
+  })
+
 const makeId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+
+function UploadedFilesPanel({ uploaded, onClear }) {
+  return (
+    <div className="rounded-3xl border border-slate-200 bg-white shadow-sm overflow-hidden h-[16rem] lg:h-full min-h-0 flex flex-col">
+      <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
+        <div>
+          <div className="text-sm font-semibold text-slate-900">Uploaded</div>
+          <div className="text-xs text-slate-500 mt-0.5">
+            Completed filenames from the last uploads.
+          </div>
+        </div>
+        {uploaded.length > 0 ? (
+          <button
+            onClick={onClear}
+            className="px-3 py-2 rounded-xl border border-slate-200 bg-white text-xs text-slate-700 hover:bg-slate-50 transition-colors"
+          >
+            Clear
+          </button>
+        ) : null}
+      </div>
+
+      <div className="flex-1 min-h-0 overflow-y-auto">
+        {uploaded.length === 0 ? (
+          <div className="px-4 py-6 text-sm text-slate-500">No uploads yet.</div>
+        ) : (
+          <ul className="divide-y divide-slate-100">
+            {uploaded.map((u) => {
+              const filename = u.path.split('/').pop() || u.path
+              return (
+                <li key={u.id} className="px-4 py-2.5">
+                  <div className="flex items-start gap-3">
+                    <div className="mt-0.5 w-8 h-8 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center">
+                      <CheckCircle2 className="w-4 h-4" />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="text-xs font-medium text-slate-900 truncate">
+                        {filename}
+                      </div>
+                      <div className="text-xs text-slate-500 truncate mt-0.5">
+                        {u.path}
+                      </div>
+                    </div>
+                  </div>
+                </li>
+              )
+            })}
+          </ul>
+        )}
+      </div>
+    </div>
+  )
+}
 
 export default function UploadPromPage() {
   const fileInputRef = useRef(null)
   const folderInputRef = useRef(null)
-  // Map<itemId, { interval: number, timeout: number }>
-  const timersRef = useRef(new Map())
   const completionTimerRef = useRef(null)
 
   const [items, setItems] = useState([])
@@ -46,25 +136,22 @@ export default function UploadPromPage() {
     let done = 0
     let uploading = 0
     let queued = 0
-    let registering = 0
     for (const it of items) {
       if (it.status === 'invalid') invalid += 1
       else valid += 1
       if (it.status === 'done') done += 1
       if (it.status === 'uploading') uploading += 1
       if (it.status === 'queued') queued += 1
-      if (it.status === 'registering') registering += 1
     }
-    return { valid, invalid, done, uploading, queued, registering }
+    return { valid, invalid, done, uploading, queued }
   }, [items])
 
   useEffect(() => {
+    resetUploadCounter()
+  }, [])
+
+  useEffect(() => {
     return () => {
-      for (const t of timersRef.current.values()) {
-        if (t?.interval) clearInterval(t.interval)
-        if (t?.timeout) clearTimeout(t.timeout)
-      }
-      timersRef.current.clear()
       if (completionTimerRef.current) clearTimeout(completionTimerRef.current)
       completionTimerRef.current = null
     }
@@ -76,19 +163,49 @@ export default function UploadPromPage() {
     const toRegister = items.filter((it) => it.status === 'queued')
     if (toRegister.length === 0) return
 
-    // Mark as registering immediately to avoid duplicate requests on re-render.
+    // Mark as uploading immediately to avoid duplicate requests on re-render.
     setItems((prev) =>
       prev.map((it) =>
         it.status === 'queued'
-          ? { ...it, status: 'registering', message: 'Registering…' }
+          ? { ...it, status: 'uploading', progress: 1, message: 'Uploading…' }
           : it,
       ),
     )
 
     toRegister.forEach(async (it) => {
+      if (!it.file) {
+        setItems((prev) =>
+          prev.map((p) =>
+            p.id === it.id
+              ? { ...p, status: 'error', message: 'Missing file payload' }
+              : p,
+          ),
+        )
+        return
+      }
+
       try {
-        await registerFilename(it.path)
-        startFakeUpload(it.id)
+        await uploadPromFile(it.file, it.path, (progress) => {
+          setItems((prev) =>
+            prev.map((p) =>
+              p.id === it.id && p.status === 'uploading'
+                ? { ...p, progress }
+                : p,
+            ),
+          )
+        })
+        setItems((prev) =>
+          prev.map((p) =>
+            p.id === it.id
+              ? {
+                  ...p,
+                  status: 'done',
+                  progress: 100,
+                  message: '',
+                }
+              : p,
+          ),
+        )
       } catch (e) {
         setItems((prev) =>
           prev.map((p) =>
@@ -96,7 +213,7 @@ export default function UploadPromPage() {
               ? {
                   ...p,
                   status: 'error',
-                  message: 'Could not reach server (filename not registered)',
+                  message: 'Upload failed',
                 }
               : p,
           ),
@@ -108,8 +225,7 @@ export default function UploadPromPage() {
   useEffect(() => {
     if (mode !== 'queue') return
 
-    const hasActive =
-      counts.uploading > 0 || counts.queued > 0 || counts.registering > 0
+    const hasActive = counts.uploading > 0 || counts.queued > 0
     const hasAny = items.length > 0
     if (!hasAny || hasActive) return
 
@@ -123,11 +239,10 @@ export default function UploadPromPage() {
     if (completionTimerRef.current) clearTimeout(completionTimerRef.current)
     completionTimerRef.current = setTimeout(() => {
       setUploaded((prev) => {
-        const next = [
+        return [
           ...completed.map((path) => ({ id: makeId(), path, at: Date.now() })),
           ...prev,
         ]
-        return next.slice(0, 24)
       })
       setItems([])
       setMode('idle')
@@ -140,55 +255,7 @@ export default function UploadPromPage() {
     }
   }, [counts.queued, counts.uploading, items, mode])
 
-  const startFakeUpload = (id) => {
-    setItems((prev) =>
-      prev.map((it) =>
-        it.id === id ? { ...it, status: 'uploading', progress: 1 } : it,
-      ),
-    )
-
-    const existing = timersRef.current.get(id)
-    if (existing?.interval) clearInterval(existing.interval)
-    if (existing?.timeout) clearTimeout(existing.timeout)
-
-    const startedAt = Date.now()
-    const durationMs = 1600 + Math.round(Math.random() * 1800) // 1.6s–3.4s
-
-    const interval = setInterval(() => {
-      setItems((prev) =>
-        prev.map((it) => {
-          if (it.id !== id) return it
-          if (it.status !== 'uploading') return it
-          const elapsed = Date.now() - startedAt
-          const ratio = Math.min(1, elapsed / durationMs)
-
-          // Ease-out curve toward 98%, then completion flips it to 100% via timeout.
-          const eased = 1 - Math.pow(1 - ratio, 3)
-          const next = Math.max(it.progress, Math.round(eased * 98))
-          return { ...it, progress: next }
-        }),
-      )
-    }, 120)
-
-    const timeout = setTimeout(() => {
-      const t = timersRef.current.get(id)
-      if (t?.interval) clearInterval(t.interval)
-      if (t?.timeout) clearTimeout(t.timeout)
-      timersRef.current.delete(id)
-
-      setItems((prev) =>
-        prev.map((it) =>
-          it.id === id && it.status === 'uploading'
-            ? { ...it, status: 'done', progress: 100 }
-            : it,
-        ),
-      )
-    }, durationMs)
-
-    timersRef.current.set(id, { interval, timeout })
-  }
-
-  const addFilePaths = async (paths) => {
+  const addFileEntries = async (entries) => {
     setError('')
     if (completionTimerRef.current) {
       clearTimeout(completionTimerRef.current)
@@ -200,24 +267,26 @@ export default function UploadPromPage() {
     const resetBatch =
       mode === 'queue' &&
       counts.uploading === 0 &&
-      counts.queued === 0 &&
-      counts.registering === 0
+      counts.queued === 0
 
-    for (const path of paths) {
+    for (const { file, path } of entries) {
       if (!path) continue
       const ext = getExtension(path)
       const id = makeId()
-      const isValid = VALID_EXTENSIONS.includes(ext)
+      const isValid = VALID_EXTENSIONS.includes(ext) && !!file
       if (isValid) hasValid = true
 
       next.push({
         id,
+        file,
         path,
         filename: path.split('/').pop() || path,
         ext,
         status: isValid ? 'queued' : 'invalid',
         progress: 0,
-        message: isValid ? '' : 'Only .pdf and .docx are allowed',
+        message: isValid
+          ? ''
+          : 'Only .pdf and .docx are allowed, and each item must include a file',
       })
     }
 
@@ -233,8 +302,10 @@ export default function UploadPromPage() {
   }
 
   const addFiles = (files) => {
-    const paths = files.map(getDisplayPath).filter(Boolean)
-    return addFilePaths(paths)
+    const entries = files
+      .map((file) => ({ file, path: getDisplayPath(file) }))
+      .filter((it) => it.path)
+    return addFileEntries(entries)
   }
 
   const onPickFiles = (e) => {
@@ -259,14 +330,14 @@ export default function UploadPromPage() {
       return
     }
 
-    const collectedPaths = []
+    const collectedEntries = []
 
     const walkEntry = (entry, prefix = '') =>
       new Promise((resolve) => {
         if (!entry) return resolve()
         if (entry.isFile) {
           entry.file((file) => {
-            collectedPaths.push(`${prefix}${file.name}`)
+            collectedEntries.push({ file, path: `${prefix}${file.name}` })
             resolve()
           })
           return
@@ -294,20 +365,16 @@ export default function UploadPromPage() {
       await walkEntry(entry, '')
     }
 
-    if (collectedPaths.length === 0) {
+    if (collectedEntries.length === 0) {
       setError('Nothing to upload. Try dropping a folder with .pdf/.docx files.')
       return
     }
 
-    addFilePaths(collectedPaths)
+    addFileEntries(collectedEntries)
   }
 
   const clearAll = () => {
-    for (const t of timersRef.current.values()) {
-      if (t?.interval) clearInterval(t.interval)
-      if (t?.timeout) clearTimeout(t.timeout)
-    }
-    timersRef.current.clear()
+    resetUploadCounter()
     if (completionTimerRef.current) clearTimeout(completionTimerRef.current)
     completionTimerRef.current = null
     setItems([])
@@ -315,86 +382,38 @@ export default function UploadPromPage() {
   }
 
   const removeItem = (id) => {
-    setItems((prev) => {
-      const t = timersRef.current.get(id)
-      if (t?.interval) clearInterval(t.interval)
-      if (t?.timeout) clearTimeout(t.timeout)
-      timersRef.current.delete(id)
-      return prev.filter((p) => p.id !== id)
-    })
+    setItems((prev) => prev.filter((p) => p.id !== id))
   }
 
   return (
-    <div className="w-full max-w-6xl mx-auto h-full min-h-0 flex flex-col">
-      <div className="flex flex-col gap-4 mb-6">
+    <div className="w-full max-w-6xl mx-auto h-full min-h-0 flex flex-col overflow-hidden">
+      <div className="flex flex-col gap-1 mb-2 flex-none">
         <div>
           <div className="inline-flex items-center gap-2 text-xs font-semibold tracking-wide uppercase text-red-700 bg-red-50 border border-red-100 px-3 py-1 rounded-full">
             PROM forms
           </div>
-          <h1 className="text-3xl md:text-4xl font-semibold text-slate-900 mt-3">
+          <h1 className="text-xl md:text-2xl font-semibold text-slate-900 mt-1.5">
             Upload PROM documents
           </h1>
-          <p className="text-slate-600 mt-2">
+          <p className="text-xs text-slate-600 mt-1">
             Accepted extensions: <span className="font-medium">.pdf</span>,{' '}
             <span className="font-medium">.docx</span>. Folder upload is supported.
           </p>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 flex-1 min-h-0">
-        <div className="order-2 lg:order-2 lg:col-span-1">
-          <div className="rounded-3xl border border-slate-200 bg-white shadow-sm overflow-hidden h-full min-h-0 flex flex-col">
-            <div className="px-6 py-5 border-b border-slate-100 flex items-center justify-between">
-              <div>
-                <div className="text-base font-semibold text-slate-900">Uploaded</div>
-                <div className="text-xs text-slate-500 mt-0.5">
-                  Completed filenames from the last uploads.
-                </div>
-              </div>
-              {uploaded.length > 0 ? (
-                <button
-                  onClick={() => setUploaded([])}
-                  className="px-3 py-2 rounded-xl border border-slate-200 bg-white text-xs text-slate-700 hover:bg-slate-50 transition-colors"
-                >
-                  Clear
-                </button>
-              ) : null}
-            </div>
-
-            <div className="flex-1 min-h-0 overflow-auto">
-              {uploaded.length === 0 ? (
-                <div className="px-6 py-10 text-sm text-slate-500">
-                  No uploads yet.
-                </div>
-              ) : (
-                <ul className="divide-y divide-slate-100">
-                  {uploaded.map((u) => {
-                    const filename = u.path.split('/').pop() || u.path
-                    return (
-                      <li key={u.id} className="px-6 py-4">
-                        <div className="flex items-start gap-3">
-                          <div className="mt-0.5 w-9 h-9 rounded-2xl bg-emerald-50 text-emerald-600 flex items-center justify-center">
-                            <CheckCircle2 className="w-5 h-5" />
-                          </div>
-                          <div className="min-w-0">
-                            <div className="text-sm font-medium text-slate-900 truncate">
-                              {filename}
-                            </div>
-                            <div className="text-xs text-slate-500 truncate mt-0.5">
-                              {u.path}
-                            </div>
-                          </div>
-                        </div>
-                      </li>
-                    )
-                  })}
-                </ul>
-              )}
-            </div>
-          </div>
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 lg:gap-4 flex-1 min-h-0 h-full overflow-hidden">
+        <div className="order-2 lg:order-2 lg:col-span-1 h-full min-h-0">
+          <UploadedFilesPanel
+            uploaded={uploaded}
+            onClear={() => {
+              resetUploadCounter()
+              setUploaded([])
+            }}
+          />
         </div>
 
-        <div className="order-1 lg:order-1 lg:col-span-2">
+        <div className="order-1 lg:order-1 lg:col-span-2 h-full min-h-0">
           <div
             className={[
               'relative overflow-hidden rounded-3xl border bg-white shadow-sm h-full min-h-0',
@@ -406,7 +425,7 @@ export default function UploadPromPage() {
             {/* Idle (dropzone) */}
             <div
               className={[
-                'relative p-8 md:p-10 transition-all duration-300 h-full min-h-0 flex flex-col',
+                'relative p-5 md:p-6 transition-all duration-300 h-full min-h-0 flex flex-col',
                 mode === 'idle'
                   ? 'opacity-100 translate-y-0'
                   : 'opacity-0 -translate-y-2 pointer-events-none absolute inset-0',
@@ -426,22 +445,22 @@ export default function UploadPromPage() {
                   setIsDragging(false)
                 }}
                 onDrop={onDrop}
-                className="flex-1 min-h-0 rounded-2xl border-2 border-dashed border-slate-200 bg-white/60 backdrop-blur-sm p-12 md:p-16 text-center flex flex-col items-center justify-center"
+                className="flex-1 min-h-0 rounded-2xl border-2 border-dashed border-slate-200 bg-white/60 backdrop-blur-sm p-6 md:p-8 text-center flex flex-col items-center justify-center"
               >
-                <div className="mx-auto w-16 h-16 rounded-2xl bg-gradient-to-br from-red-500 to-red-600 shadow-lg shadow-red-200 flex items-center justify-center mb-6">
-                  <UploadCloud className="w-8 h-8 text-white" />
+                <div className="mx-auto w-12 h-12 rounded-2xl bg-gradient-to-br from-red-500 to-red-600 shadow-lg shadow-red-200 flex items-center justify-center mb-4">
+                  <UploadCloud className="w-6 h-6 text-white" />
                 </div>
 
-                <h2 className="text-2xl font-semibold text-slate-900">
+                <h2 className="text-xl font-semibold text-slate-900">
                   Drag and drop files or a folder
                 </h2>
-                <p className="text-slate-600 mt-2">
+                <p className="text-sm text-slate-600 mt-1.5">
                   This upload box is for <span className="font-medium">PROM forms</span>{' '}
                   only. Accepted: <span className="font-medium">.pdf</span>,{' '}
                   <span className="font-medium">.docx</span>.
                 </p>
 
-                <div className="flex flex-col sm:flex-row items-center justify-center gap-3 mt-8">
+                <div className="flex flex-col sm:flex-row items-center justify-center gap-2 mt-5">
                   <button
                     onClick={() => fileInputRef.current?.click()}
                     className="w-full sm:w-auto px-4 py-2.5 rounded-xl bg-red-600 text-white hover:bg-red-700 transition-colors inline-flex items-center justify-center gap-2"
@@ -482,7 +501,7 @@ export default function UploadPromPage() {
                 />
               </div>
 
-              <div className="mt-7 text-xs text-slate-500">
+              <div className="mt-3 text-xs text-slate-500">
                 Tip: dropping folders works best in Chromium-based browsers.
               </div>
             </div>
@@ -496,11 +515,11 @@ export default function UploadPromPage() {
                   : 'opacity-0 translate-y-2 pointer-events-none absolute inset-0',
               ].join(' ')}
             >
-              <div className="px-6 py-5 border-b border-slate-100 flex items-start justify-between bg-white/50 backdrop-blur-sm">
-                <div>
-                  <div className="text-xl font-semibold text-slate-900">Upload queue</div>
-                  <div className="text-sm text-slate-500 mt-1">
-                    Showing progress bars for each file (animation only).
+              <div className="px-4 py-3 border-b border-slate-100 flex items-start justify-between bg-white/50 backdrop-blur-sm">
+                  <div>
+                  <div className="text-lg font-semibold text-slate-900">Upload queue</div>
+                  <div className="text-xs text-slate-500 mt-0.5">
+                    Uploading files to the server.
                   </div>
                 </div>
                 <div className="flex items-center gap-3">
@@ -531,8 +550,6 @@ export default function UploadPromPage() {
                       ? 'Completed'
                       : it.status === 'uploading'
                         ? 'Uploading'
-                        : it.status === 'registering'
-                          ? 'Registering'
                         : it.status === 'queued'
                           ? 'Queued'
                           : isInvalid
@@ -542,7 +559,7 @@ export default function UploadPromPage() {
                               : it.status
 
                       return (
-                        <li key={it.id} className="px-6 py-4">
+                        <li key={it.id} className="px-4 py-2.5">
                           <div className="flex items-start gap-3">
                             <div
                               className={[

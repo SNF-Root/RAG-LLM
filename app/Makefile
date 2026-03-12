@@ -1,8 +1,9 @@
-.PHONY: server frontend snfRAG stop help
+.PHONY: server frontend workers snfRAG stop help
 
 help:
 	@echo "  server   - Start the backend server"
 	@echo "  frontend - Start the frontend development server"
+	@echo "  workers  - Start 2 background upload workers"
 	@echo "  snfRAG - Start both backend and frontend in parallel"
 	@echo "  stop     - Stop both servers"
 	@echo "  help     - Show this help message"
@@ -12,6 +13,12 @@ server:
 
 frontend:
 	cd frontend && npm run dev -- --host 0.0.0.0
+
+workers:
+	@for i in 1 2 3 4; do \
+		cd .. && PYTHONPATH=/app:/app/preprocessing python -m app.worker & \
+	done; \
+	wait
 
 
 snfRAG:
@@ -30,4 +37,3 @@ stop:
 	@pkill -f "uvicorn" || true
 	@pkill -f "vite" || true
 	@echo "Stopped all development servers"
-

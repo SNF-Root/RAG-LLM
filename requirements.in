@@ -8,6 +8,9 @@ openai==1.95.1
 pip-tools==7.5.3
 pipdeptree==2.31.0
 psycopg2-binary==2.9.10
+python-multipart==0.0.20
+redis==5.2.1
+rq==2.1.0
 scikit-learn==1.8.0
 semchunk==2.2.2
 tree-sitter==0.25.2

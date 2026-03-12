@@ -1122,7 +1122,7 @@ def extract_prom_unified(file_path: str, debug: bool = False) -> Optional[PromFo
 # def process_file(file_path) -> PromForm and str:
 #     is_docx = file_path.lower().endswith('.docx')
 #     if is_docx:
-#         prom = extract_prom_from_docx(file_path, debug=False)
+#         prom = extract_prom_from_docx(file_path, debug=False
 #     else:
 #         print("PDF are hanging, skipping for now")
 #         # prom = extract_prom_from_docling(file_path, debug=False)

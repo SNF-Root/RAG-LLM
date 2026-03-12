@@ -16,6 +16,8 @@ docling==2.70.0
 docling-core==2.61.0
 docling-ibm-models==3.11.0
 docling-parse==4.7.3
+doc2txt==1.0.8
+docx2txt==0.9
 et_xmlfile==2.0.0
 Faker==40.1.2
 fastapi==0.129.0
@@ -70,6 +72,7 @@ pyproject_hooks==1.2.0
 python-dateutil==2.9.0.post0
 python-docx==1.2.0
 python-dotenv==1.1.1
+python-multipart==0.0.20
 python-pptx==1.0.2
 pytz==2025.2
 PyYAML==6.0.3
@@ -79,6 +82,8 @@ regex==2026.1.15
 requests==2.32.4
 rich==14.3.1
 rpds-py==0.30.0
+rq==2.1.0
+redis==5.2.1
 rtree==1.4.1
 safetensors==0.7.0
 scikit-learn==1.8.0

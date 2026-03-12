@@ -1,9 +1,15 @@
 import os
-from fastapi import FastAPI, HTTPException, Query
+import uuid
+import shutil
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, HTTPException, Query, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+import redis.asyncio as redis
+from typing import Optional
 from openai import OpenAI
 from preprocessing.database.pg import get_db_connection
+from rq import Queue, Worker
 
 EMBEDDING_MODEL = "text-embedding-ada-002"
 CHAT_MODEL = os.getenv("CHAT_MODEL", "gpt-4o")
@@ -51,7 +57,20 @@ def create_openai_client() -> OpenAI:
 
 
 client = create_openai_client()
-app = FastAPI()
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    try:
+        yield
+    finally:
+        clear_uploaded_files_dir()
+
+
+app = FastAPI(lifespan=lifespan)
+redis_memory = redis.from_url(os.getenv("REDIS_URL"), decode_responses=True)
+redis_file_queue = redis.Redis(host="redis", port=6379, db=1)
+
 
 app.add_middleware(
     CORSMiddleware,
@@ -83,48 +102,83 @@ class UploadRejectedFile(BaseModel):
     filename: str
     reason: str
 
+class UploadFileResponse(BaseModel):
+    filename: str
+    path: str
+    content_type : Optional[str] = None
+    size_bytes : int
+    status: str
 
-class UploadRegisterResponse(BaseModel):
-    upload_kind: str
-    valid_extensions: list[str]
-    accepted: list[str]
-    rejected: list[UploadRejectedFile]
+class UploadCounterResetResponse(BaseModel):
+    key: str
+    value: int
 
 
 VALID_PROM_UPLOAD_EXTENSIONS = [".pdf", ".docx"]
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+UPLOAD_DIR = os.path.abspath(os.path.join(BASE_DIR, "..", "uploaded_files"))
+os.makedirs(UPLOAD_DIR, exist_ok=True)
 
-@app.get("/upload/prom", response_model=UploadRegisterResponse)
-def register_prom_upload_filenames(
-    filename: list[str] = Query(default=[], description="One or more filenames (or relative paths)."),
-) -> UploadRegisterResponse:
-    if not filename:
-        raise HTTPException(status_code=400, detail="At least one 'filename' query param is required")
+def clear_uploaded_files_dir() -> None:
+    if os.path.isdir(UPLOAD_DIR):
+        shutil.rmtree(UPLOAD_DIR, ignore_errors=True)
 
-    accepted: list[str] = []
-    rejected: list[UploadRejectedFile] = []
 
-    for raw_name in filename:
-        name = (raw_name or "").strip()
-        if not name:
-            rejected.append(UploadRejectedFile(filename=raw_name, reason="empty_filename"))
-            continue
 
-        _, ext = os.path.splitext(name)
-        if ext.lower() not in VALID_PROM_UPLOAD_EXTENSIONS:
-            rejected.append(
-                UploadRejectedFile(filename=name, reason="invalid_extension")
-            )
-            continue
+@app.post("/upload/prom", response_model=UploadFileResponse)
+async def upload_file(
+    file: UploadFile = File(...),
+    path: str = Form(...)
+) -> UploadFileResponse:
+    safe_filename = os.path.basename(file.filename or "upload.bin")
+    stem, ext = os.path.splitext(safe_filename)
+    unique_suffix = uuid.uuid4().hex[:8]
+    stored_filename = f"{stem}__{unique_suffix}{ext}"
+    filepath = os.path.join(UPLOAD_DIR, stored_filename)
+    #maybe use aiofiles and turn this blocking operation into async
+    total_file_bytes = 0
+    with open(filepath, "wb") as f:
+        while chunk := await file.read(1024 * 1024):
+            f.write(chunk)
+            total_file_bytes += len(chunk)
+    await redis_file_queue.rpush("pending_files", filepath)
 
-        accepted.append(name)
-
-    return UploadRegisterResponse(
-        upload_kind="prom_forms",
-        valid_extensions=VALID_PROM_UPLOAD_EXTENSIONS,
-        accepted=accepted,
-        rejected=rejected,
+    return UploadFileResponse(
+        filename=file.filename,
+        path = path,
+        content_type = file.content_type,
+        size_bytes = total_file_bytes,
+        status = "queued"
     )
+
+@app.post("/upload/emails", response_model=UploadFileResponse)
+async def upload_email(
+    file: UploadFile = File(...),
+    path: str = Form(...)
+) -> UploadFileResponse:
+    data = await file.read()
+    await redis_memory.incr("email_upload_counter")
+    return UploadFileResponse(
+        filename=file.filename,
+        path = path,
+        content_type = "email_threads",
+        size_bytes = len(data),
+        status = "queued"
+    )
+
+
+@app.get("/upload/show-list")
+async def show_list():
+    data_items = await redis_file_queue.lrange("pending_files", 0, -1)
+    return data_items
+
+@app.post("/upload/reset-counter", response_model=UploadCounterResetResponse)
+async def reset_upload_counter() -> UploadCounterResetResponse:
+    key = "promfile_upload_counter"
+    await redis_memory.set(key, 0)
+    print(f"{key} set to 0")
+    return UploadCounterResetResponse(key=key, value=0)
 
 
 def embed_query(text: str) -> list[float]:

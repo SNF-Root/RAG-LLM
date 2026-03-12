@@ -7,6 +7,11 @@ from models.insert import PromForm
 from rgx_pattern import collapse_spaces, extract_date_from_section, first_span_after, fuzzy_find_header, strip_boilerplate
 
 
+#OLD CODE; ALL NECESSARY FUNCTIONS ARE BEING IMPORTED INTO prom_pipeline.py
+#MOVE TO prom_pipeline.py FOR ENTRY
+
+
+
 target_list = [
     "Title",
     "Requestor:",
@@ -154,6 +159,9 @@ def print_problematic_file_texts(trouble_files):
         print("-" * 100)
         print(extracted_text)
         print("=" * 100)
+
+
+
 
 
 if __name__ == "__main__":

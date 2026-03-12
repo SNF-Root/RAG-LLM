@@ -118,7 +118,6 @@ async def run_prom_pipeline(prom_objects: List[PromForm], con) -> int:
     
 
 
-
 if __name__ == "__main__":
     print("--- Extracting PROM Forms ---")
     pdf_path = "../files/promForms/"
@@ -150,6 +149,8 @@ if __name__ == "__main__":
             for result in pool.imap_unordered(fork_then_extract, pdf_files):
                 if isinstance(result, str):
                     problematic_files.append(result)
+                elif result is None:
+                    problematic_files
                 else:
                     processed_files += 1
                     print(f"Finished processing {result.filename}")
